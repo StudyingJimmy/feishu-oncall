@@ -28,7 +28,21 @@ const (
 )
 
 // Sink 事件接收方：传输层解析出事件后回调它（router.Router.Handle 就是它的实现）。
-type Sink func(ctx context.Context, event *Event) error
+// 消息事件返回 nil 响应即可；卡片回调返回卡片响应（飞书用它更新卡片 / 弹提示）。
+type Sink func(ctx context.Context, event *Event) (*CardResponse, error)
+
+// CardResponse 卡片回调响应。
+// Card 非空时，飞书会把用户刚点的那张卡片更新成 Card 的内容（卡片 JSON，1.0/2.0 要与原卡片一致）。
+type CardResponse struct {
+	Toast *CardToast
+	Card  any
+}
+
+// CardToast 客户端提示弹窗。
+type CardToast struct {
+	Type    string `json:"type"` // info / success / error / warning
+	Content string `json:"content"`
+}
 
 // Event 归一化后的入站事件。
 type Event struct {
@@ -117,13 +131,17 @@ func (e *CardActionEvent) Brief() string {
 
 // CardActionValue 我们放进卡片按钮 value 的载荷；具体动作由业务层解释。
 type CardActionValue struct {
-	Action    string            `json:"action"`
-	SessionID string            `json:"session_id,omitempty"`
-	TicketNo  string            `json:"ticket_no,omitempty"`
-	TeamKey   string            `json:"team_key,omitempty"`
-	Answer    string            `json:"answer,omitempty"`
-	Ephemeral bool              `json:"ephemeral,omitempty"` // 卡片是否"仅特定人可见"（这类卡片只能删掉重发）
-	Extra     map[string]string `json:"extra,omitempty"`
+	Action      string            `json:"action"`
+	SessionID   string            `json:"session_id,omitempty"`
+	TicketNo    string            `json:"ticket_no,omitempty"`
+	TeamKey     string            `json:"team_key,omitempty"`
+	Answer      string            `json:"answer,omitempty"`
+	Result      string            `json:"result,omitempty"`      // 反馈按钮带上原卡片的结果内容，点击时用来重建卡片
+	Feedback    string            `json:"feedback,omitempty"`    // 已反馈文案（空 = 还没反馈过）
+	Decision    string            `json:"decision,omitempty"`    // 已决策文案（空 = 还没决策过）
+	TenantID    string            `json:"tenant_id,omitempty"`   // 目标租户（紧急介入时用来拉值班人员）
+	Description string            `json:"description,omitempty"` // 问题描述
+	Extra       map[string]string `json:"extra,omitempty"`
 }
 
 // 卡片动作（写在按钮 value.action 里）。
@@ -134,10 +152,24 @@ const (
 	ActionPrecheckSolved     = "precheck_solved"      // 已解决，无需转人工
 	ActionPrecheckEscalate   = "precheck_escalate"    // 仍需转人工
 	ActionPrecheckBuildGroup = "precheck_build_group" // 提交建群表单
+	ActionPrecheckCancel     = "precheck_cancel"      // 取消建群
+	ActionPrecheckUrgent     = "precheck_urgent"      // 非工作时间：需要紧急介入
 )
 
 // IsPrecheckAction 是否预检卡片动作。
 func IsPrecheckAction(action string) bool { return strings.HasPrefix(action, "precheck_") }
+
+// 命令卡片动作（/upgrade /transfer /event /save 的表单卡片）。
+const (
+	ActionCommandUpgrade  = "command_upgrade"  // 提交升级信息
+	ActionCommandTransfer = "command_transfer" // 提交转接信息
+	ActionCommandEvent    = "command_event"    // 提交作战室信息
+	ActionCommandSave     = "command_save"     // 提交挂起信息
+	ActionCommandCancel   = "command_cancel"   // 取消
+)
+
+// IsCommandAction 是否命令卡片动作。
+func IsCommandAction(action string) bool { return strings.HasPrefix(action, "command_") }
 
 func truncate(s string, max int) string {
 	r := []rune(s)

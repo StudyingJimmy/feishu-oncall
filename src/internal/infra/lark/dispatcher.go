@@ -28,29 +28,61 @@ func newDispatcher(cfg conf.LarkConfig, sink dto.Sink) *dispatcher.EventDispatch
 			return forward(event.EventReq, event, sink)
 		}).
 		OnP2CardActionTrigger(func(_ context.Context, event *larkcallback.CardActionTriggerEvent) (*larkcallback.CardActionTriggerResponse, error) {
-			return nil, forward(event.EventReq, event, sink)
+			// 卡片回调必须同步返回：飞书用响应体决定"更新卡片 / 弹提示"，
+			// 返回 nil 或空响应都会让客户端提示交互出错。
+			resp, err := sink(context.Background(), parseOrLog(event.EventReq, event))
+			if err != nil {
+				logx.L().Error("卡片回调处理失败", zap.Error(err))
+				return &larkcallback.CardActionTriggerResponse{
+					Toast: &larkcallback.Toast{Type: "error", Content: "处理失败，请稍后重试"},
+				}, nil
+			}
+			return toCardResponse(resp), nil
 		})
 }
 
 // forward 解析事件并异步交给路由。
 //
-// 之所以异步：飞书要求 3 秒内响应，而预检检索、拉群可能更慢。
-// 这里用独立 context —— HTTP 请求的 context 在响应写回后就失效了。
+// 消息事件可以慢慢处理（飞书只要求 3 秒内响应回调本身），所以异步执行；
+// 卡片回调不能异步（见上面的说明），它走 forwardSync。
 func forward(req *larkevent.EventReq, fallback any, sink dto.Sink) error {
-	event, err := ParseEvent(rawBody(req, fallback))
-	if err != nil {
-		// 脏数据不返回错误，避免飞书反复重推
-		logx.L().Warn("解析飞书事件失败", zap.Error(err))
+	event := parseOrLog(req, fallback)
+	if event == nil {
 		return nil
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), sinkTimeout)
 		defer cancel()
-		if err := sink(ctx, event); err != nil {
+		if _, err := sink(ctx, event); err != nil {
 			logx.L().Error("事件处理失败", zap.String("event_id", event.EventID), zap.Error(err))
 		}
 	}()
 	return nil
+}
+
+// parseOrLog 解析事件；脏数据只告警不报错（避免飞书反复重推）。
+func parseOrLog(req *larkevent.EventReq, fallback any) *dto.Event {
+	event, err := ParseEvent(rawBody(req, fallback))
+	if err != nil {
+		logx.L().Warn("解析飞书事件失败", zap.Error(err))
+		return nil
+	}
+	return event
+}
+
+// toCardResponse 把内部响应转成 SDK 需要的结构。卡片用 JSON 构建，所以 type 固定为 raw。
+func toCardResponse(resp *dto.CardResponse) *larkcallback.CardActionTriggerResponse {
+	out := &larkcallback.CardActionTriggerResponse{}
+	if resp == nil {
+		return out
+	}
+	if resp.Toast != nil {
+		out.Toast = &larkcallback.Toast{Type: resp.Toast.Type, Content: resp.Toast.Content}
+	}
+	if resp.Card != nil {
+		out.Card = &larkcallback.Card{Type: "raw", Data: resp.Card}
+	}
+	return out
 }
 
 // rawBody 优先用 SDK 附带的原始报文（保留它没建模的字段，如卡片回调的 context），

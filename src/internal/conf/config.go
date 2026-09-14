@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -45,6 +47,7 @@ type Config struct {
 	RocketMQ RocketMQConfig `mapstructure:"rocketmq"`
 	Precheck PrecheckConfig `mapstructure:"precheck"`
 	SLA      SLAConfig      `mapstructure:"sla"`
+	WorkTime WorkTimeConfig `mapstructure:"worktime"`
 }
 
 // AppConfig 应用基础配置。
@@ -147,6 +150,8 @@ type PrecheckConfig struct {
 	TopK              int     `mapstructure:"top_k"`
 	MinScore          float64 `mapstructure:"min_score"`
 	SessionTTLMinutes int     `mapstructure:"session_ttl_minutes"`
+	// ReactionEmoji 收到提问时先给对方消息回的表情（飞书 emoji_type，OnIt 就是"敲键盘"那个）。
+	ReactionEmoji string `mapstructure:"reaction_emoji"`
 }
 
 // SLAConfig 时效与升级配置。
@@ -154,6 +159,66 @@ type SLAConfig struct {
 	ScanIntervalSeconds int            `mapstructure:"scan_interval_seconds"`
 	ReminderLeadMinutes int            `mapstructure:"reminder_lead_minutes"`
 	Minutes             map[string]int `mapstructure:"minutes"`
+}
+
+// WorkTimeConfig 工作时间配置：决定了建群后是"直接拉值班人员"还是"先发非工作时间提示"。
+type WorkTimeConfig struct {
+	// Ranges 时间段，形如 ["09:30-12:30", "14:00-18:30"]；支持跨天（如 "22:00-02:00"）。
+	Ranges []string `mapstructure:"ranges"`
+}
+
+// IsWorkTime 判断某个时刻是否在工作时间内（按东八区，与机器人的部署时区无关）。
+func (c *Config) IsWorkTime(t time.Time) bool {
+	local := t.In(cst)
+	minutes := local.Hour()*60 + local.Minute()
+	for _, item := range c.WorkTime.Ranges {
+		start, end, ok := parseTimeRange(item)
+		if !ok {
+			continue
+		}
+		if start <= end {
+			if minutes >= start && minutes <= end {
+				return true
+			}
+			continue
+		}
+		if minutes >= start || minutes <= end { // 跨天，如 22:00-02:00
+			return true
+		}
+	}
+	return false
+}
+
+// cst 东八区。
+var cst = time.FixedZone("CST", 8*3600)
+
+// parseTimeRange 解析 "09:30-12:30"，返回当天的分钟数。
+func parseTimeRange(item string) (start, end int, ok bool) {
+	parts := strings.Split(strings.TrimSpace(item), "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	start, okStart := parseClock(parts[0])
+	end, okEnd := parseClock(parts[1])
+	if !okStart || !okEnd {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// parseClock 解析 "09:30" 或 "9.30" 为分钟数。
+func parseClock(text string) (int, bool) {
+	normalized := strings.ReplaceAll(strings.TrimSpace(text), ".", ":")
+	parts := strings.Split(normalized, ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(strings.TrimSpace(parts[0]))
+	minute, errMinute := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	return hour*60 + minute, true
 }
 
 // Load 读取配置：搜配置文件 + 环境变量覆盖 + 本地兜底 + 校验。
@@ -257,6 +322,11 @@ func (c *Config) Validate() error {
 	if len(c.SLA.Minutes) == 0 {
 		return errors.New("sla.minutes 未配置")
 	}
+	for _, item := range c.WorkTime.Ranges {
+		if _, _, ok := parseTimeRange(item); !ok {
+			return fmt.Errorf("worktime.ranges 格式不对: %q（应为 \"09:30-12:30\"）", item)
+		}
+	}
 	if c.App.Env == "" || c.App.Env == "local" {
 		return nil
 	}
@@ -356,8 +426,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("precheck.top_k", 5)
 	v.SetDefault("precheck.min_score", 0.35)
 	v.SetDefault("precheck.session_ttl_minutes", 120)
+	v.SetDefault("precheck.reaction_emoji", "OnIt")
 
 	v.SetDefault("sla.scan_interval_seconds", 60)
 	v.SetDefault("sla.reminder_lead_minutes", 10)
 	v.SetDefault("sla.minutes", map[string]int{"p0": 15, "p1": 30, "p2": 120, "p3": 480})
+
+	v.SetDefault("worktime.ranges", []string{"09:30-12:30", "14:00-18:30"})
 }

@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"bokeoncall/internal/infra/lark"
 	"bokeoncall/internal/model/dto"
 	"bokeoncall/internal/service/command"
 	"bokeoncall/internal/service/precheck"
@@ -24,8 +25,8 @@ type Handler struct {
 }
 
 // NewHandler 构造。
-func NewHandler(precheckSvc *precheck.Service) *Handler {
-	return &Handler{commands: command.NewHandler(), precheck: precheckSvc}
+func NewHandler(precheckSvc *precheck.Service, larkClient *lark.Client) *Handler {
+	return &Handler{commands: command.NewHandler(larkClient), precheck: precheckSvc}
 }
 
 // HandleQuestionP2P 单聊提问（待实现：私聊里发起预检）。
@@ -45,10 +46,14 @@ func (h *Handler) HandleCommand(ctx context.Context, msg *dto.MessageEvent, cmd 
 }
 
 // HandleCardAction 卡片回调：预检卡片交预检服务，工单卡片待实现。
-func (h *Handler) HandleCardAction(ctx context.Context, action *dto.CardActionEvent) error {
-	if dto.IsPrecheckAction(action.Value.Action) {
+func (h *Handler) HandleCardAction(ctx context.Context, action *dto.CardActionEvent) (*dto.CardResponse, error) {
+	switch {
+	case dto.IsPrecheckAction(action.Value.Action):
 		return h.precheck.HandleCardAction(ctx, action)
+	case dto.IsCommandAction(action.Value.Action):
+		return h.commands.HandleCardAction(ctx, action)
+	default:
+		logx.L().Info("TODO 未实现 工单卡片回调", zap.String("card", action.Brief()))
+		return nil, nil
 	}
-	logx.L().Info("TODO 未实现 工单卡片回调", zap.String("card", action.Brief()))
-	return nil
 }

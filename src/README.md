@@ -41,32 +41,64 @@
 | 判断函数 | 现在做什么 | 扩展点 |
 | --- | --- | --- |
 | `isP2P` | `chat_type == p2p` | — |
-| `isFromThread` | `thread_id` 非空（话题消息） | 以后可把 `root_id` / `parent_id` 也算作话题消息 |
+| `isFromThread` | `thread_id` 非空（话题消息） | 目前只用于日志；若想让话题内免 @ 也触发预检，在 `handleMessage` 里加这个判断 |
 | `isMentionBot` | 是否 @机器人（没拿到 bot open_id 时退化为「@了任意人」） | — |
 | `isOnCallGroup` | 是否在 oncall 协作群，**目前恒为 true** | 接团队群配置 / 工单服务群判断 |
 
-| 场景 | 去向（当前都是 `service.LogHandler` 打日志占位） |
+| 场景 | 去向 |
 | --- | --- |
 | 单聊（p2p） | `HandleQuestionP2P` |
-| 来自话题（thread），无论有没有 @机器人 | `HandleQuestionChat` |
 | 群里 @机器人 且在 oncall 群、并带可解析命令 | `HandleCommand` |
-| 其它情况（含群里 @了机器人但没带命令） | `HandleQuestionChat` |
+| 群里 @机器人 且在 oncall 群、其余情况 | `HandleQuestionChat`（预检流式卡片） |
+| **群里没有 @机器人**（含话题内消息） | **什么都不做**，只打一行 `忽略：群里没有 @机器人` |
 
-- 命令格式 `/命令 参数…`，参数原样透传：`/upgrade L2 网络抖动` → `upgrade` + `L2 网络抖动`。
-  目前支持 `/upgrade`（升级值班层级）、`/transfer`（转派）、`/event`（升级为故障、拉故障作战室）、`/solve`（标记已解决）、`/save`（暂时挂起）。
-  入口在 `service/command/handler.go`：`Handle` 按命令分发到 `handleUpgrade` / `handleTransfer` / `handleEvent` / `handleSolve` / `handleSave` 五个处理函数。
+- 命令格式 `/命令`（信息都通过卡片表单填写，不用带参数）。入口在 `service/command/handler.go`，每条命令先发一张**仅发起人可见**的表单卡片：
+
+  | 命令 | 含义 | 卡片标题 | 表单字段 | 确认提交入口 |
+  | --- | --- | --- | --- | --- |
+  | `/upgrade` | 升级值班层级 | 请填写本次升级的信息 | 具体原因 | `handleConfirmUpgrade`（TODO） |
+  | `/transfer` | 转派给其它租户 | 请填写本次转接的信息 | 目标租户（下拉）、具体原因 | `handleConfirmTransfer`（TODO） |
+  | `/event` | 升级为故障、拉起作战室 | 请填写本次升级作战室的信息 | 作战室群名、关联项目、具体原因 | `handleConfirmEvent`（TODO） |
+  | `/save` | 暂时挂起工单 | 请填写本次工单挂起的信息 | 具体原因 | `handleConfirmSave`（TODO） |
+  | `/solve` | 标记已解决 | （暂未做卡片） | — | `handleSolve`（TODO） |
+
+  每张卡片底部都是同一行的「确认提交 / 取消」（`column_set` 分栏，`flex_mode: none` + 列宽 `auto` + 4px 间距，两个按钮贴合不拉开）：
+  确认提交走对应的 `handleConfirmXxx`，取消返回「已取消」。
+  目标租户的下拉选项来自 `service/tenant`（占位数据，TODO 接真实租户服务）。
 - 卡片回调不走这套规则，直接交 `HandleCardAction`，由业务层按 `value.action` 分发。
-- 日志：每条消息打一行 `收到消息`（p2p / thread / mention_bot / oncall_group / 文本 / 摘要），命中命令再打一行 `命中命令`；卡片回调打 `收到卡片回调`。
+- 群聊必须 @机器人 才响应，否则一律忽略（避免群里闲聊触发预检）；命令也要求先 @机器人。
+- 日志：每条消息打一行 `收到消息`（p2p / thread / mention_bot / oncall_group / 文本 / 摘要），命中命令再打一行 `命中命令`，被忽略的打一行 `忽略：群里没有 @机器人`；卡片回调打 `收到卡片回调`。
 
 ### 预检流式卡片（question_chat）
 
 群内提问（`question_chat`）交给 `service/precheck` 处理：
 
-1. 先发一张**仅发起人可见**的卡片（群里其他人看不到）：`@发起人 正在匹配知识库...`，分割线下是红色「跳过，转人工」按钮；
-2. 检索知识库（`searchKnowledge` 目前是占位实现，返回空结果）；
-3. 拿到结果后更新同一张卡片：结果 + 「👍 有帮助 / 👎 无帮助」，分割线下是「已解决，无需转人工 / 仍需转人工」；
-4. 点 👍 / 👎 → 卡片换成「您已选择 👍 有帮助，感谢您的反馈！」；
-5. 点「跳过，转人工」/「仍需转人工」→ 卡片换成**建群表单**：问题描述（多行输入）+ 目标租户（下拉选择），提交后走建群建单（`buildGroup` 目前是 TODO 日志）。
+1. **先给用户的消息加一个表情回复**（`precheck.reaction_emoji`，默认 `OnIt` = 敲键盘那个），让用户立刻知道机器人在响应；
+2. 再发一张**仅发起人可见**的卡片（群里其他人看不到）：`@发起人 正在匹配知识库...`，分割线下是红色「跳过，转人工」按钮；
+3. 检索知识库（`searchKnowledge` 目前是占位实现，返回空结果）；
+4. 拿到结果后更新同一张卡片：结果 + 「👍 有帮助 / 👎 无帮助」，分割线下是「已解决，无需转人工 / 仍需转人工」；
+5. 点 👍 / 👎 → **这一行按钮**变成「您已选择 👍 有帮助，感谢您的反馈！」，结果内容与下方按钮都保留；
+6. 点「已解决，无需转人工」→ **底部这一行按钮**变成「您的问题已确认通过预检解决」；
+7. 点「跳过，转人工」/「仍需转人工」→ 原卡片底部那一行变成「请填写下方卡片确认入群信息」，同时**另发一张建群卡片**：问题描述（多行输入）+ 目标租户（下拉选择）+ 同一行的「确认提交」/ 红色「取消」（用 `column_set` 分栏实现并排）。
+8. 点「确认提交」→ 建群卡片先变成「已提交，正在建群…」；后台调 `im/v1/chats` 建群（`CreateChat`），成功后同一张卡片换成成功态：
+
+   ```text
+   @你 **已提交，建群成功**
+
+   问题描述：xxx
+   目标租户：xxx
+   ────────────
+   [ 前往群聊 ]        <- 飞书 applink：https://applink.feishu.cn/client/chat/open?openChatId=<chat_id>
+   ```
+
+   建群失败时卡片显示失败原因，用户可以重新发起。成员目前传空（TODO：按目标租户 / 值班团队拉当班同学进群）。
+9. 建群成功后按**建群时间**分流（`WorkTimeCard` / `WorkingCard`）：
+   - **工作时间**（`worktime.ranges`，默认 `09:30-12:30`、`14:00-18:30`，按东八区判断）：调 `inviteOnDutyL1` 把该租户的 L1 值班人员拉进群，然后发一张公开的「工单处理中」卡片：@值班人员 + 问题描述 + 本群 5 个可用命令；
+   - **非工作时间**：群里发一张公开的「非工作时间提示」卡（工作时间文案由配置渲染），下方分割线 + 红色「需要紧急介入」按钮；用户点击后走同一套 `startService`（拉人 + 工单处理中卡），并把提示卡更新成「已收到紧急介入请求」。
+
+   > `inviteOnDutyL1(tenantID, chatID)` 目前是 **TODO 桩函数**（只打日志、不拉人）：需要先接值班数据源
+   > （`oc_duty_shift` / 值班服务）拿到租户对应的 L1 值班同学 open_id，再调 `s.lark.InviteMembers(chatID, openIDs)`。
+   > 因此「工单处理中」卡片现在 @ 的是一段占位文案。
 
 用到的飞书接口（都在 `infra/lark/client.go`）：
 
@@ -76,10 +108,17 @@
 | 原地更新卡片 | `PATCH /open-apis/im/v1/messages/:message_id` | 用上一步返回的 message_id |
 | 话题内回复 | `POST /open-apis/im/v1/messages/:message_id/reply`（`reply_in_thread=true`） | **话题群不支持 ephemeral**，话题内自动退化为公开回复（日志会提示） |
 | 删除仅特定人可见卡片 | `POST /open-apis/ephemeral/v1/delete` | ephemeral 卡片**没有更新接口**，所以"更新" = 删掉旧的再发一张；普通消息（话题内回复）仍走 patch |
+| 卡片交互后更新卡片 | **回调响应体里回传卡片**：`{"toast": {...}, "card": {"type": "raw", "data": 卡片JSON}}` | 这是飞书推荐的更新方式，点按钮后直接把新卡片回给飞书即可，不用调任何更新接口 |
 
 卡片 JSON 集中在 `service/precheck/card.go`（`SearchingCard` / `ResultCard`），改顺序或按钮文案只动这一个文件。
 知识库检索的接入点是 `service/precheck/service.go` 的 `searchKnowledge`（TODO：FAQ + 文档 + 历史工单三源混合检索）。
-按钮回调在 `HandleCardAction`：反馈（👍/👎）与转人工（发建群表单）已实现；`buildGroup`（真正建群建单）和「已解决」还是 TODO。
+按钮回调在 `HandleCardAction`：反馈（👍/👎）与转人工（换成建群表单）已实现；`buildGroup`（真正建群建单）和「已解决」还是 TODO。
+注意：卡片交互的更新**必须同步返回**——飞书用响应体决定卡片怎么变，返回空响应或 nil 会让客户端报 `200080 / 200672` 这类交互错误。
+
+> 状态处理：更新卡片要回传**整张卡片**，所以需要原卡片内容。这里不用服务端缓存，
+> 而是把「结果内容 + 当前状态」一并塞进按钮 value（`result` / `feedback` / `decision`，见 `dto.CardActionValue`），
+> 点击时原样带回，据此重建卡片——无状态，重启服务、多实例部署都不受影响。
+> 另外：转人工时如果新卡片发送失败，原卡片**不会**被改成决策文案（保留原样，方便用户重试）。
 
 > 关于"可搜索"下拉：飞书卡片 JSON 的下拉选择（`select_static`）在 1.0 / 2.0 组件文档里都**没有**搜索字段，
 > 只有人员选择器（`select_person`）自带搜索。选项很多时的替代方案：改成「输入关键词 + 提交后校验」，
@@ -164,7 +203,8 @@ cmd  →  app / api  →  service  →  repository  →  model(entity/dto/enum)
 ## 飞书应用需要的能力
 
 - **事件订阅**：`im.message.receive_v1`（收消息）、`card.action.trigger`（卡片按钮回调）；回调地址 `POST /lark/event`。
-- **权限**：发消息、建群与拉人、读通讯录基本信息（查姓名）；想记录群里全部消息还需要「读取群消息」相关权限。
+- **权限**：发消息、**添加消息表情回复**（`im:message.reaction`，用于回 OnIt 表情）、建群与拉人、读通讯录基本信息（查姓名）；
+  想记录群里全部消息还需要「读取群消息」相关权限。
 - **配置项**：`lark.app_id` / `app_secret` / `verification_token` / `encrypt_key` / `bot_open_id` 填到 `configs/config.yaml`（从 `configs/config.example.yaml` 复制，**不入库**），或用环境变量注入。
 - 飞书要求回调 **3 秒内响应**，所以 handler 只做校验 + 幂等，重活（检索、拉群）异步处理再返回 200。
 

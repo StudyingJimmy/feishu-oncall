@@ -218,6 +218,26 @@ func (c *Client) DeleteEphemeralCard(ctx context.Context, messageID string) erro
 	return c.postData(ctx, "/open-apis/ephemeral/v1/delete", map[string]any{"message_id": messageID}, nil)
 }
 
+// AddReaction 给消息加一个表情回复（表示"收到了、在处理"）。
+// emojiType 取飞书表情文案里的值，见 /document/server-docs/im-v1/message-reaction/emojis-introduce，
+// 例如 OnIt（敲键盘）、DONE、THUMBSUP。
+func (c *Client) AddReaction(ctx context.Context, messageID, emojiType string) error {
+	req := larkim.NewCreateMessageReactionReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewCreateMessageReactionReqBodyBuilder().
+			ReactionType(larkim.NewEmojiBuilder().EmojiType(emojiType).Build()).
+			Build()).
+		Build()
+	resp, err := c.sdk.Im.V1.MessageReaction.Create(ctx, req)
+	if err != nil {
+		return fmt.Errorf("添加表情回复失败: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("添加表情回复失败: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return nil
+}
+
 // postData POST 请求并解析 data 段（SDK 没封装的接口走这里）。
 func (c *Client) postData(ctx context.Context, path string, body, out any) error {
 	resp, err := c.sdk.Post(ctx, path, body, larkcore.AccessTokenTypeTenant)

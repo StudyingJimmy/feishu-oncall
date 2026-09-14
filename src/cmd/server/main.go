@@ -50,7 +50,7 @@ func main() {
 
 	// TODO(依赖装配): 在这里初始化 MySQL / ES / 对象存储等，并注入到 service.NewHandler。
 	precheckSvc := precheck.NewService(cfg, larkClient)
-	eventRouter := router.New(botOpenID, service.NewHandler(precheckSvc))
+	eventRouter := router.New(botOpenID, service.NewHandler(precheckSvc, larkClient))
 	callbacks := startEventSource(ctx, cfg, eventRouter)
 
 	srv := &http.Server{

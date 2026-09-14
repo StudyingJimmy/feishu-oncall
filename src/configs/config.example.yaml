@@ -83,6 +83,7 @@ precheck:
   top_k: 5
   min_score: 0.35
   session_ttl_minutes: 120
+  reaction_emoji: "OnIt"     # 收到提问先回的表情（飞书 emoji_type，OnIt = 敲键盘）
 
 sla:
   scan_interval_seconds: 60
@@ -92,3 +93,10 @@ sla:
     p1: 30
     p2: 120
     p3: 480
+
+# 工作时间：建群后落在这个区间内就直接拉值班人员入群，否则先发非工作时间提示卡。
+# 支持跨天区间（如 "22:00-02:00"），时区固定为东八区。
+worktime:
+  ranges:
+    - "09:30-12:30"
+    - "14:00-18:30"

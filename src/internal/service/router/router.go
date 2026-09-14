@@ -27,7 +27,8 @@ type Handler interface {
 	HandleQuestionP2P(ctx context.Context, msg *dto.MessageEvent) error
 	HandleQuestionChat(ctx context.Context, msg *dto.MessageEvent) error
 	HandleCommand(ctx context.Context, msg *dto.MessageEvent, cmd command.Command, args string) error
-	HandleCardAction(ctx context.Context, action *dto.CardActionEvent) error
+	// HandleCardAction 返回卡片响应（飞书会把用户点的那张卡片更新成响应里的卡片）。
+	HandleCardAction(ctx context.Context, action *dto.CardActionEvent) (*dto.CardResponse, error)
 }
 
 // Router 事件路由。
@@ -43,19 +44,19 @@ func New(botOpenID string, handler Handler) *Router {
 }
 
 // Handle 事件入口：HTTP 回调与长连接都调它。
-func (r *Router) Handle(ctx context.Context, ev *dto.Event) error {
+func (r *Router) Handle(ctx context.Context, ev *dto.Event) (*dto.CardResponse, error) {
 	if ev == nil {
-		return nil
+		return nil, nil
 	}
 	switch ev.Kind {
 	case dto.EventKindMessage:
-		return r.handleMessage(ctx, ev.Message)
+		return nil, r.handleMessage(ctx, ev.Message)
 	case dto.EventKindCardAction:
 		return r.handleCardAction(ctx, ev.CardAction)
 	default:
 		r.log.Debug("忽略未识别的事件",
 			zap.String("event_id", ev.EventID), zap.String("event_type", ev.EventType))
-		return nil
+		return nil, nil
 	}
 }
 
@@ -84,22 +85,30 @@ func (r *Router) handleMessage(ctx context.Context, msg *dto.MessageEvent) error
 	if p2p {
 		return r.handler.HandleQuestionP2P(ctx, msg)
 	}
-	if inThread {
-		return r.handler.HandleQuestionChat(ctx, msg)
+
+	// 群聊必须 @机器人 才响应，否则什么都不做（避免群里的闲聊触发预检）。
+	// 话题（thread）内的消息目前同样要求 @机器人；以后若想让话题内免 @ 也走预检，
+	// 在这里加上 isFromThread(msg) 的判断即可。
+	if !mentionBot || !oncallGroup {
+		r.log.Info("忽略：群里没有 @机器人",
+			zap.String("event_id", msg.EventID),
+			zap.Bool("thread", inThread),
+			zap.String("message", msg.Brief()),
+		)
+		return nil
 	}
-	if mentionBot && oncallGroup {
-		if cmd, args, ok := command.Parse(msg.Text()); ok {
-			r.log.Info("命中命令", zap.String("command", string(cmd)), zap.String("args", args))
-			return r.handler.HandleCommand(ctx, msg, cmd, args)
-		}
+
+	if cmd, args, ok := command.Parse(msg.Text()); ok {
+		r.log.Info("命中命令", zap.String("command", string(cmd)), zap.String("args", args))
+		return r.handler.HandleCommand(ctx, msg, cmd, args)
 	}
 	return r.handler.HandleQuestionChat(ctx, msg)
 }
 
 // handleCardAction 卡片回调。
-func (r *Router) handleCardAction(ctx context.Context, action *dto.CardActionEvent) error {
+func (r *Router) handleCardAction(ctx context.Context, action *dto.CardActionEvent) (*dto.CardResponse, error) {
 	if action == nil {
-		return nil
+		return nil, nil
 	}
 	r.log.Info("收到卡片回调",
 		zap.String("event_id", action.EventID),
