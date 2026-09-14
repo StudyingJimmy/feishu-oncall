@@ -1,0 +1,16 @@
+scripts
+
+# --- Go 构建产物 ---
+bin/
+*.exe
+*.test
+
+# --- 本地配置与运行产物 ---
+.env
+logs/
+*.log
+
+# --- 实际使用的配置（仓库只提交 configs/config.example.yaml 模板）---
+# 用 **/ 前缀是为了让规则在任何子目录都生效（写 configs/config.yaml 只会匹配仓库根目录）
+**/configs/config.yaml
+**/configs/config.local.yaml

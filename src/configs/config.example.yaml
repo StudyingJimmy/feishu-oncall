@@ -1,0 +1,94 @@
+# ============================================================================
+# BokeOnCall 后端配置模板
+#
+# 仓库只提交这份模板；真实的 configs/config.yaml 已在 .gitignore 里，不会进 GitLab。
+# 开始开发：
+#   1) cp configs/config.example.yaml configs/config.yaml   （或执行 make init-config）
+#   2) 按注释填自己的值；只在自己机器上生效的差异放 configs/config.local.yaml（优先级更高）
+#   3) 生产 / CI 不落文件，直接用环境变量注入（前缀 BOKEONCALL_，层级用下划线连接）
+#
+# 加载顺序（后面的覆盖前面的）：
+#   内置默认值 < configs/config.yaml < configs/config.local.yaml < 环境变量
+# 也可以用 -config 指定文件，或用环境变量 BOKEONCALL_CONFIG 指定路径（此时不再搜索默认路径）。
+#
+# 敏感项（飞书 secret、数据库密码、对象存储 key）建议一律用环境变量注入：
+#   BOKEONCALL_LARK_APP_SECRET / BOKEONCALL_MYSQL_PASSWORD / BOKEONCALL_MINIO_SECRET_KEY
+# ============================================================================
+
+app:
+  env: local                 # local / test / prod（非 local 会强制校验必填项）
+  host: 0.0.0.0
+  port: 8080
+  group_prefix: "OnCall"     # 拉群时群名前缀，如 OnCall-知识库检索问题
+
+log:
+  level: info
+  dir: logs
+  console: true
+
+mysql:
+  host: 127.0.0.1
+  port: 3307                 # 本地中间件：scripts/docker-compose.yml 映射到 3307（3306 留给本机原生 MySQL）
+  user: bokeoncall
+  # 本地留空 = 用内置默认值（与 scripts/.env 一致）；非 local 环境留空会启动失败
+  password: ""
+  database: bokeoncall
+  charset: utf8mb4
+  max_open_conns: 50
+  max_idle_conns: 10
+  auto_migrate: true         # 骨架阶段自动建表；接上正式迁移工具后请关掉
+
+lark:
+  app_id: ""                 # 飞书开放平台应用 App ID，形如 cli_xxx
+  app_secret: ""             # 建议用 BOKEONCALL_LARK_APP_SECRET 注入
+  verification_token: ""     # 事件订阅里的 Verification Token
+  encrypt_key: ""            # 开启加密推送时的事件 Encrypt Key（回调解密也用）
+  bot_open_id: ""            # 机器人 open_id：留空时启动会用 app_id/app_secret 自动获取（群里判断是否 @机器人）
+  # 事件接入方式：longconn = 长连接（本地调试，不需要公网入口）
+  #              callback = HTTP 回调（生产用，在飞书开放平台把回调地址配成 https://你的域名/lark/event）
+  event_mode: longconn
+  api_base: "https://open.feishu.cn"
+  timeout_seconds: 10
+
+es:
+  addresses:
+    - "http://127.0.0.1:9200"
+  username: ""
+  password: ""
+  index_chunks: "bokeoncall_kb_chunks"
+  index_tickets: "bokeoncall_tickets"
+  request_timeout_seconds: 10
+
+minio:
+  endpoint: "127.0.0.1:9000"
+  access_key: ""             # 本地留空 = 回退内置默认值 bokeoncall；生产用 BOKEONCALL_MINIO_ACCESS_KEY
+  secret_key: ""             # 本地留空 = 回退内置默认值 bokeoncall123；生产用 BOKEONCALL_MINIO_SECRET_KEY
+  use_ssl: false
+  region: "us-east-1"
+  bucket_kb: "bokeoncall"           # 知识库原始文档
+  bucket_media: "bokeoncall-media"  # 多模态文件（图片 / 音视频 / 日志截图）
+
+rocketmq:
+  enable: false              # true 时走 broker 的 8081 gRPC proxy
+  endpoint: "127.0.0.1:8081"
+  access_key: ""
+  secret_key: ""
+  namespace: ""
+  topic_events: "bokeoncall_events"
+  producer_group: "bokeoncall-producer"
+  consumer_group: "bokeoncall-consumer"
+
+precheck:
+  max_steps: 5
+  top_k: 5
+  min_score: 0.35
+  session_ttl_minutes: 120
+
+sla:
+  scan_interval_seconds: 60
+  reminder_lead_minutes: 10
+  minutes:                   # 各优先级目标响应时长（分钟），超时触发升级
+    p0: 15
+    p1: 30
+    p2: 120
+    p3: 480
