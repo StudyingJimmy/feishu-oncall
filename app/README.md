@@ -10,7 +10,7 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-访问 `http://127.0.0.1:5173`。在 PowerShell 禁止执行 `npm.ps1` 的环境下使用 `npm.cmd`；其他终端可直接用 `npm`。
+桌面预览：`http://127.0.0.1:5173/`。独立移动版预览：`http://127.0.0.1:5173/mobile`，也可使用 `/?view=mobile`。屏宽不超过 760px 时会自动切换为移动版；`/?view=desktop` 可强制查看桌面版。在 PowerShell 禁止执行 `npm.ps1` 的环境下使用 `npm.cmd`；其他终端可直接用 `npm`。
 
 ```powershell
 npm.cmd run typecheck
@@ -19,13 +19,16 @@ npm.cmd run build
 npm.cmd run preview
 ```
 
-构建产物位于 `app/dist/`，可部署到支持 SPA 静态资源的服务。该项目目前没有飞书应用身份认证或真实 API，不能把 `dist` 当作已完成的生产应用。
+构建产物位于 `app/dist/`，可部署到支持 SPA 静态资源的服务。若静态托管不支持 `/mobile` 路径回退到 `index.html`，可使用 `/?view=mobile`。该项目目前没有飞书应用身份认证或真实 API，不能把 `dist` 当作已完成的生产应用。
 
 ## 结构
 
 | 路径 | 职责 |
 | --- | --- |
-| `src/workspace/Workspace.tsx` | 页面状态与交互编排 |
+| `src/workspace/useOncallWorkspace.ts` | 桌面与移动版共用的状态、搜索与建单流程 |
+| `src/workspace/Workspace.tsx` | 桌面工作台 |
+| `src/workspace/ResponsiveWorkspace.tsx` | 根据路径、参数和屏宽选择界面 |
+| `src/mobile/` | 独立移动版：对话、底部导航、工单列表、输入框和拉群表单 |
 | `src/components/` | 侧栏、对话、输入框、租户排行、工单详情、确认弹窗 |
 | `src/domain/types.ts` | 领域类型与 `OncallGateway` 契约 |
 | `src/services/mockOncallGateway.ts` | 模拟租户、知识库、工单及建单逻辑 |
@@ -36,6 +39,7 @@ npm.cmd run preview
 1. 输入问题时，租户排行会按关键词实时更新。
 2. 按 Enter 或点击“搜索”会把问题加入对话，并返回模拟知识库结果和推荐租户；Shift + Enter 换行。
 3. 点击租户，填写问题描述并确认，模拟拉群建单。新工单会出现在“进行中”侧栏并保存在当前浏览器 `localStorage`。
-4. 侧栏按“进行中 / 已完成”展开收起，点击单号查看工单详情。
+4. 桌面侧栏按“进行中 / 已完成”展开收起，点击单号查看工单详情。
+5. 移动版使用底部“对话 / 新问题 / 工单”导航；工单页按状态筛选，租户选择与拉群确认使用触屏友好的浮层和底部表单。桌面与移动版共用数据与业务逻辑。
 
 真实接入方案与可复制的后续实现提示词见仓库根目录 [readme.md](../readme.md)。
